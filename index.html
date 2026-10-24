@@ -440,6 +440,19 @@ h1{font-size:22px;margin:0;letter-spacing:-.01em}
         <li>Touche <b>OK</b>, puis teste avec le bouton ci-dessus.</li>
       </ol>
     </details>
+    <label class="occ" style="margin-top:12px"><input type="checkbox" id="remDelOn"><span>Supprimer aussi le rappel iPhone quand je termine ou supprime la tâche<small>Ne concerne que les tâches pour lesquelles tu as créé un rappel avec la cloche.</small></span></label>
+    <label class="lbl">Nom du raccourci de suppression
+      <input class="field" id="remDelName" type="text" value="Supprimer rappel" maxlength="60"></label>
+    <details class="rec"><summary>Créer le raccourci de suppression (une seule fois)</summary>
+      <ol>
+        <li>Dans <b>Raccourcis</b>, touche <b>+</b> et nomme-le exactement comme ci-dessus.</li>
+        <li><b>Scinder le texte</b> : texte = <i>Entrée de raccourci</i>, séparateur = <i>Nouvelles lignes</i> (un titre par ligne).</li>
+        <li><b>Répéter avec chaque élément</b> du résultat.</li>
+        <li>Dans la boucle : <b>Rechercher des rappels</b> avec le filtre <i>Titre</i> · <i>est</i> · <i>Élément de répétition</i> (ajoute aussi <i>Est terminé</i> · <i>Non</i> si tu veux garder les rappels déjà cochés).</li>
+        <li>Toujours dans la boucle : une action qui <b>supprime les rappels</b> trouvés (cherche « supprimer » + « rappel »).</li>
+        <li>Touche <b>OK</b>.</li>
+      </ol>
+    </details>
     <details class="rec"><summary>Son et vibration</summary>
       <ol>
         <li>Réglages iPhone → <b>Notifications</b> → <b>Rappels</b> : active <b>Autoriser les notifications</b>, <b>Sons</b>, et choisis le style <b>Bannières permanentes</b>.</li>
@@ -519,7 +532,7 @@ var lastToday='';
 var cloud={ad:null,signedIn:false,mode:'off',loginShown:false};   // mode : off | init | out | in | error
 var stores=[];
 var profiles=[], activeId='main';
-var remPrefs={time:'09:00',occ:['0','1'],name:'Ajouter rappel'}, RKEY='todo-notes-reminders-v1', SKEY='todo-notes-remsent-v1', remSent={}, bel={task:null,sel:{}};
+var remPrefs={time:'09:00',occ:['0','1'],name:'Ajouter rappel',delName:'Supprimer rappel',delOn:true}, RKEY='todo-notes-reminders-v1', SKEY='todo-notes-remsent-v1', remSent={}, bel={task:null,sel:{}};
 
 /* ---------- Utilitaires ---------- */
 function h(tag,props){
@@ -886,7 +899,7 @@ async function cloudStart(){
    ===================================================================== */
 function loadRem(){
   try{ var o=JSON.parse(localStorage.getItem(RKEY)||'null');
-    if(o){ if(/^\d{2}:\d{2}$/.test(o.time)) remPrefs.time=o.time; if(Array.isArray(o.occ)) remPrefs.occ=o.occ.map(String); if(o.name) remPrefs.name=String(o.name); } }catch(e){}
+    if(o){ if(/^\d{2}:\d{2}$/.test(o.time)) remPrefs.time=o.time; if(Array.isArray(o.occ)) remPrefs.occ=o.occ.map(String); if(o.name) remPrefs.name=String(o.name); if(o.delName) remPrefs.delName=String(o.delName); if(o.delOn===false) remPrefs.delOn=false; } }catch(e){}
   try{ var r=JSON.parse(localStorage.getItem(SKEY)||'null'); if(r&&typeof r==='object') remSent=r; }catch(e){}
 }
 function saveRem(){ try{ localStorage.setItem(RKEY,JSON.stringify(remPrefs)); }catch(e){} }
@@ -913,7 +926,25 @@ function sendReminder(title,dates){
   openUrl(url);
   return url;
 }
-function openRem(){ $('#remName').value=remPrefs.name; $('#remModal').hidden=false; }
+/* Suppression : quand on supprime une tâche dont un rappel a été créé, on lance un 2e raccourci qui supprime ce rappel.
+   Le texte envoyé = un titre par ligne (même titre que celui envoyé à la création). */
+function takeReminderTitles(list){
+  var titles=[], changed=false;
+  list.forEach(function(t){
+    var e=remSent[t.id]; if(!e) return;
+    var ti=(e&&typeof e==='object'&&e.title)?e.title:String(t.title||'').replace(/[\r\n]+/g,' ').trim();
+    if(ti&&titles.indexOf(ti)<0) titles.push(ti);
+    delete remSent[t.id]; changed=true;
+  });
+  if(changed) saveSent();
+  return titles;
+}
+function cancelReminders(titles){
+  if(!titles||!titles.length||!remPrefs.delOn) return;
+  try{ todoStore.flush(); }catch(e){}
+  openUrl('shortcuts://run-shortcut?name='+encodeURIComponent(remPrefs.delName||'Supprimer rappel')+'&input=text&text='+encodeURIComponent(titles.join('\n')));
+}
+function openRem(){ $('#remName').value=remPrefs.name; $('#remDelName').value=remPrefs.delName; $('#remDelOn').checked=!!remPrefs.delOn; $('#remModal').hidden=false; }
 function closeRem(){ $('#remModal').hidden=true; }
 function updateBelBtn(){
   var n=$('#belOcc').querySelectorAll('input:checked').length;
@@ -951,8 +982,8 @@ function confirmBell(){
   ks.sort(function(a,b){return b-a;});                       // du plus ancien au plus proche de l'échéance
   ks.forEach(function(k){ dates.push(fmtAlert(alertAt(dl,k,tm))); });
   remPrefs.time=tm; remPrefs.occ=ks.map(String); saveRem();
-  remSent[t.id]=Date.now(); saveSent();
   var title=t.title;
+  remSent[t.id]={at:Date.now(),title:String(title).replace(/[\r\n]+/g,' ').trim()}; saveSent();
   closeBell(); renderLists();
   sendReminder(title,dates);
 }
@@ -1070,6 +1101,7 @@ function deleteProfile(id){
   commitNow();
   var snapP=JSON.stringify(profiles), snapT=JSON.stringify(tasks), snapN=JSON.stringify(notes), prev=activeId;
   profiles=profiles.filter(function(x){return x.id!==id;});
+  var delTitles=takeReminderTitles(tasks.filter(function(t){return t.profile===id;}));
   tasks=tasks.filter(function(t){return t.profile!==id;});
   notes=notes.filter(function(n){return n.profile!==id;});
   if(id===activeId){
@@ -1081,6 +1113,7 @@ function deleteProfile(id){
     activeId=prev; storeActive(); curId=null; showEmptyPane();
     saveProfiles(); saveTasks(); saveNotes(); render(); renderNotes(); renderProfile();
   });
+  cancelReminders(delTitles);
 }
 
 /* =====================================================================
@@ -1206,11 +1239,15 @@ function addTask(title,deadline){
 }
 function toggleDone(id){
   var t=findTask(id); if(!t) return;
-  if(!t.done){t.done=true;t.doneAt=Date.now();} else {t.done=false;t.doneAt=0;}
+  var titles=[];
+  if(!t.done){ t.done=true; t.doneAt=Date.now(); titles=takeReminderTitles([t]); } else {t.done=false;t.doneAt=0;}
   saveTasks(); render();
+  cancelReminders(titles);
 }
 function deleteTask(id){
+  var titles=takeReminderTitles(tasks.filter(function(t){return t.id===id;}));
   withUndo('Tâche supprimée',function(){tasks=tasks.filter(function(t){return t.id!==id;});});
+  cancelReminders(titles);
 }
 function setDeadline(id,date){
   var t=findTask(id); if(!t) return;
@@ -1954,7 +1991,9 @@ $('#filterClear').addEventListener('click',function(){filterDate='';render();});
 $('#btnSort').addEventListener('click',sortByDeadline);
 $('#btnToggleDone').addEventListener('click',function(){showDone=!showDone;saveTasks();renderLists();});
 $('#btnClearDone').addEventListener('click',function(){
+  var titles=takeReminderTitles(tasks.filter(function(t){return t.done&&t.profile===activeId;}));
   withUndo('Tâches terminées supprimées',function(){tasks=tasks.filter(function(t){return !(t.done&&t.profile===activeId);});});
+  cancelReminders(titles);
 });
 
 /* --- notes --- */
@@ -1996,6 +2035,8 @@ $('#belSettings').addEventListener('click',openRem);
 $('#remClose').addEventListener('click',closeRem);
 $('#remModal').addEventListener('click',function(e){ if(e.target===$('#remModal')) closeRem(); });
 $('#remName').addEventListener('change',function(){ remPrefs.name=this.value.trim()||'Ajouter rappel'; this.value=remPrefs.name; saveRem(); });
+$('#remDelName').addEventListener('change',function(){ remPrefs.delName=this.value.trim()||'Supprimer rappel'; this.value=remPrefs.delName; saveRem(); });
+$('#remDelOn').addEventListener('change',function(){ remPrefs.delOn=this.checked; saveRem(); });
 $('#remTest').addEventListener('click',function(){ sendReminder('Rappel test',[fmtAlert(new Date(Date.now()+120000))]); });
 $('#belClose').addEventListener('click',closeBell);
 $('#belModal').addEventListener('click',function(e){ if(e.target===$('#belModal')) closeBell(); });
